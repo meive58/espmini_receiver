@@ -57,7 +57,6 @@ WebServer server(80);
 volatile int cmdX = 0;       // -100..100 (direita +)
 volatile int cmdY = 0;       // -100..100 (frente +)
 volatile int cmdWeapon = 0;  // 0..100
-volatile bool cmdArmed = false;
 volatile uint32_t lastCmdMs = 0;
 bool hasCmd = false;
 
@@ -72,44 +71,57 @@ const char PAGE[] PROGMEM = R"HTML(
 <title>Robô</title>
 <style>
 *{box-sizing:border-box;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
-body{margin:0;background:#111;color:#eee;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;gap:16px;padding:12px;touch-action:none}
+html,body{height:100%;margin:0}
+body{background:#111;color:#eee;font-family:sans-serif;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:8px 24px;touch-action:none;--s:min(68vh,240px)}
+.side{display:flex;align-items:center;justify-content:center}
+.mid{display:flex;flex-direction:column;align-items:center;gap:14px}
 #st{font-size:14px;padding:4px 10px;border-radius:10px;background:#a00}
 #st.ok{background:#080}
-#joy{width:240px;height:240px;border-radius:50%;background:#222;border:2px solid #555;position:relative;touch-action:none}
-#knob{width:80px;height:80px;border-radius:50%;background:#4af;position:absolute;left:80px;top:80px}
-#arm{width:240px;padding:16px;font-size:20px;border:0;border-radius:10px;background:#555;color:#fff}
-#arm.on{background:#d22}
-#w{width:90%;max-width:400px;height:40px}
+.stick{position:relative;border-radius:50%;background:#222;border:2px solid #555;touch-action:none}
+.stick .knob{position:absolute;left:50%;top:50%;width:33%;aspect-ratio:1;border-radius:50%;background:#4af;transform:translate(-50%,-50%)}
+#joy{width:var(--s);height:var(--s)}
+#thr{width:calc(var(--s)*0.42);height:var(--s);border-radius:40px;background:#1b1b1b}
+#thr .knob{width:86%;height:56px;aspect-ratio:auto;border-radius:12px;background:#f80}
+.hint{display:none;position:fixed;top:4px;left:0;right:0;text-align:center;font-size:13px;color:#fa0;pointer-events:none}
+@media (orientation:portrait){.hint{display:block}}
 </style></head><body>
-<div id="st">desconectado</div>
-<div id="joy"><div id="knob"></div></div>
-<button id="arm">ARMA DESARMADA</button>
-<div>Arma: <span id="wv">0</span>%</div>
-<input id="w" type="range" min="0" max="100" value="0">
+<div class="side"><div id="joy" class="stick"><div class="knob"></div></div></div>
+<div class="mid">
+  <div id="st">desconectado</div>
+  <div>Arma: <span id="wv">0</span>%</div>
+</div>
+<div class="side"><div id="thr" class="stick"><div class="knob"></div></div></div>
+<div class="hint">Gire o celular para o modo horizontal</div>
 <script>
-const joy=document.getElementById('joy'),knob=document.getElementById('knob'),
-arm=document.getElementById('arm'),w=document.getElementById('w'),wv=document.getElementById('wv'),st=document.getElementById('st');
-let x=0,y=0,armed=false,busy=false,R=120,KR=40;
-function setKnob(px,py){knob.style.left=(R-KR+px)+'px';knob.style.top=(R-KR+py)+'px';}
-function move(e){
-  const r=joy.getBoundingClientRect();
-  let dx=e.clientX-(r.left+R),dy=e.clientY-(r.top+R);
-  const max=R-KR,d=Math.hypot(dx,dy);
-  if(d>max){dx*=max/d;dy*=max/d;}
-  setKnob(dx,dy);x=dx/max;y=-dy/max;
+const $=id=>document.getElementById(id);
+function stick(id,vertical){
+  const base=$(id),k=base.firstElementChild,s={x:0,y:0,on:false};
+  const place=(dx,dy)=>{k.style.transform=`translate(calc(-50% + ${dx}px),calc(-50% + ${dy}px))`;};
+  const lim=()=>({mx:(base.clientWidth-k.offsetWidth)/2,my:(base.clientHeight-k.offsetHeight)/2});
+  function move(e){
+    const r=base.getBoundingClientRect(),{mx,my}=lim();
+    let dx=vertical?0:e.clientX-(r.left+r.width/2),dy=e.clientY-(r.top+r.height/2);
+    if(vertical){dy=Math.max(-my,Math.min(my,dy));s.y=-dy/my;}
+    else{const m=Math.min(mx,my),d=Math.hypot(dx,dy);if(d>m){dx*=m/d;dy*=m/d;}s.x=dx/m;s.y=-dy/m;}
+    place(dx,dy);
+  }
+  base.addEventListener('pointerdown',e=>{s.on=true;base.setPointerCapture(e.pointerId);move(e);});
+  base.addEventListener('pointermove',e=>{if(s.on)move(e);});
+  const up=()=>{s.on=false;if(!vertical){s.x=s.y=0;place(0,0);}};
+  base.addEventListener('pointerup',up);
+  base.addEventListener('pointercancel',up);
+  if(vertical){place(0,lim().my);s.y=-1;}
+  return s;
 }
-joy.addEventListener('pointerdown',e=>{joy.setPointerCapture(e.pointerId);move(e);});
-joy.addEventListener('pointermove',e=>{if(e.buttons||e.pressure>0)move(e);});
-function release(){x=0;y=0;setKnob(0,0);}
-joy.addEventListener('pointerup',release);
-joy.addEventListener('pointercancel',release);
-arm.onclick=()=>{armed=!armed;arm.classList.toggle('on',armed);arm.textContent=armed?'ARMA ARMADA':'ARMA DESARMADA';if(!armed){w.value=0;wv.textContent=0;}};
-w.oninput=()=>{wv.textContent=w.value;};
+const L=stick('joy',false),T=stick('thr',true);
+let busy=false;
 setInterval(async()=>{
   if(busy)return;busy=true;
-  const q='x='+Math.round(x*100)+'&y='+Math.round(y*100)+'&w='+(armed?w.value:0)+'&a='+(armed?1:0);
-  try{await fetch('/c?'+q,{cache:'no-store'});st.textContent='conectado';st.className='ok';}
-  catch(e){st.textContent='desconectado';st.className='';}
+  const w=Math.round((T.y+1)/2*100);
+  $('wv').textContent=w;
+  const q='x='+Math.round(L.x*100)+'&y='+Math.round(L.y*100)+'&w='+w;
+  try{await fetch('/c?'+q,{cache:'no-store'});$('st').textContent='conectado';$('st').className='ok';}
+  catch(e){$('st').textContent='desconectado';$('st').className='';}
   busy=false;
 },50);
 </script></body></html>
@@ -122,7 +134,6 @@ void handleControl() {
   cmdX = constrain(server.arg("x").toInt(), -100, 100);
   cmdY = constrain(server.arg("y").toInt(), -100, 100);
   cmdWeapon = constrain(server.arg("w").toInt(), 0, 100);
-  cmdArmed = server.arg("a").toInt() == 1;
   lastCmdMs = millis();
   hasCmd = true;
   server.send(204);
@@ -169,8 +180,8 @@ void updateOutputs() {
   pwmWriteUs(0, pctToUs(ch1));
   pwmWriteUs(1, pctToUs(ch2));
 
-  // Arma: só para frente (1500..2000), rampa na subida e parada imediata ao desarmar.
-  float target = cmdArmed ? pctToUs(cmdWeapon) : US_NEUTRAL;
+  // Arma: só para frente (1500..2000), rampa na subida e parada imediata ao reduzir.
+  float target = pctToUs(cmdWeapon);
   if (target <= weaponUs) {
     weaponUs = target;
   } else {
