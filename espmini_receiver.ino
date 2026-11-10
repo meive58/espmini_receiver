@@ -7,10 +7,12 @@
 const char *AP_SSID = "RoboCombate";
 const char *AP_PASS = "12345678";  // mínimo 8 caracteres
 
-// ESC 1 (locomoção): canal 1 / canal 2. ESC 2 (arma): canal 1.
+// ESC 1 (locomoção): canal 1 / canal 2. ESC 2 (arma): canal 1 / canal 2 (motores em paralelo).
 const uint8_t PIN_DRIVE_CH1 = 0;
 const uint8_t PIN_DRIVE_CH2 = 1;
 const uint8_t PIN_WEAPON = 3;
+const uint8_t PIN_WEAPON2 = 4;
+const bool INVERT_WEAPON2 = false;  // true se o motor 2 da arma estiver soldado ao contrário
 
 // true: o ESP faz a mistura (ESC em modo independente: CH1 = motor esquerdo, CH2 = motor direito).
 // false: ESC em modo misto: CH1 = aceleração, CH2 = direção.
@@ -29,7 +31,7 @@ const uint8_t DEADZONE_PCT = 5;
 // ---------- PWM (50 Hz, 14 bits) ----------
 const uint32_t PWM_FREQ = 50;
 const uint8_t PWM_BITS = 14;
-const uint8_t PINS[] = {PIN_DRIVE_CH1, PIN_DRIVE_CH2, PIN_WEAPON};
+const uint8_t PINS[] = {PIN_DRIVE_CH1, PIN_DRIVE_CH2, PIN_WEAPON, PIN_WEAPON2};
 const uint8_t NUM_PINS = sizeof(PINS);
 
 void pwmBegin(uint8_t idx) {
@@ -148,6 +150,7 @@ void allNeutral() {
   pwmWriteUs(0, US_NEUTRAL);
   pwmWriteUs(1, US_NEUTRAL);
   pwmWriteUs(2, US_NEUTRAL);
+  pwmWriteUs(3, US_NEUTRAL);
   weaponUs = US_NEUTRAL;
 }
 
@@ -188,6 +191,7 @@ void updateOutputs() {
     weaponUs = min(target, weaponUs + WEAPON_RAMP_US_S * dt);
   }
   pwmWriteUs(2, (int)weaponUs);
+  pwmWriteUs(3, INVERT_WEAPON2 ? 2 * US_NEUTRAL - (int)weaponUs : (int)weaponUs);
 }
 
 void setup() {
