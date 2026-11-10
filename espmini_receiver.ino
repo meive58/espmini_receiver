@@ -13,6 +13,7 @@ const uint8_t PIN_DRIVE_CH2 = 1;
 const uint8_t PIN_WEAPON = 3;
 const uint8_t PIN_WEAPON2 = 4;
 const bool INVERT_WEAPON2 = false;  // true se o motor 2 da arma estiver soldado ao contrário
+const bool INVERT_WEAPON = false;   // true inverte a direção de giro dos dois motores da arma
 
 // true: o ESP faz a mistura (ESC em modo independente: CH1 = motor esquerdo, CH2 = motor direito).
 // false: ESC em modo misto: CH1 = aceleração, CH2 = direção.
@@ -59,10 +60,12 @@ WebServer server(80);
 volatile int cmdX = 0;       // -100..100 (direita +)
 volatile int cmdY = 0;       // -100..100 (frente +)
 volatile int cmdWeapon = 0;  // 0..100
+volatile bool cmdFlip = false;  // robô de cabeça para baixo
 volatile uint32_t lastCmdMs = 0;
 bool hasCmd = false;
 
 float weaponUs = US_NEUTRAL;
+bool weaponInvert = INVERT_WEAPON;
 uint32_t lastUpdateMs = 0;
 
 // ---------- Página ----------
@@ -84,6 +87,8 @@ body{background:#111;color:#eee;font-family:sans-serif;display:grid;grid-templat
 #joy{width:var(--s);height:var(--s)}
 #thr{width:calc(var(--s)*0.42);height:var(--s);border-radius:40px;background:#1b1b1b}
 #thr .knob{width:86%;height:56px;aspect-ratio:auto;border-radius:12px;background:#f80}
+#flip{padding:12px 16px;font-size:16px;border:0;border-radius:10px;background:#555;color:#fff}
+#flip.on{background:#d22}
 .hint{display:none;position:fixed;top:4px;left:0;right:0;text-align:center;font-size:13px;color:#fa0;pointer-events:none}
 @media (orientation:portrait){.hint{display:block}}
 </style></head><body>
@@ -91,6 +96,7 @@ body{background:#111;color:#eee;font-family:sans-serif;display:grid;grid-templat
 <div class="mid">
   <div id="st">desconectado</div>
   <div>Arma: <span id="wv">0</span>%</div>
+  <button id="flip">NORMAL</button>
 </div>
 <div class="side"><div id="thr" class="stick"><div class="knob"></div></div></div>
 <div class="hint">Gire o celular para o modo horizontal</div>
@@ -116,12 +122,13 @@ function stick(id,vertical){
   return s;
 }
 const L=stick('joy',false),T=stick('thr',true);
-let busy=false;
+let busy=false,flip=0;
+$('flip').onclick=()=>{flip^=1;$('flip').classList.toggle('on',!!flip);$('flip').textContent=flip?'INVERTIDO':'NORMAL';};
 setInterval(async()=>{
   if(busy)return;busy=true;
   const w=Math.round((T.y+1)/2*100);
   $('wv').textContent=w;
-  const q='x='+Math.round(L.x*100)+'&y='+Math.round(L.y*100)+'&w='+w;
+  const q='x='+Math.round(L.x*100)+'&y='+Math.round(L.y*100)+'&w='+w+'&f='+flip;
   try{await fetch('/c?'+q,{cache:'no-store'});$('st').textContent='conectado';$('st').className='ok';}
   catch(e){$('st').textContent='desconectado';$('st').className='';}
   busy=false;
@@ -136,6 +143,7 @@ void handleControl() {
   cmdX = constrain(server.arg("x").toInt(), -100, 100);
   cmdY = constrain(server.arg("y").toInt(), -100, 100);
   cmdWeapon = constrain(server.arg("w").toInt(), 0, 100);
+  cmdFlip = server.arg("f").toInt() == 1;
   lastCmdMs = millis();
   hasCmd = true;
   server.send(204);
@@ -143,6 +151,8 @@ void handleControl() {
 
 // ---------- Saídas ----------
 int pctToUs(float pct) { return US_NEUTRAL + (int)(pct * (US_MAX - US_NEUTRAL) / 100.0f); }
+
+int mirrorUs(int us, bool invert) { return invert ? 2 * US_NEUTRAL - us : us; }
 
 float deadzone(int v) { return abs(v) < DEADZONE_PCT ? 0 : v; }
 
@@ -165,6 +175,7 @@ void updateOutputs() {
   }
 
   float thr = deadzone(cmdY);
+  if (cmdFlip) thr = -thr;  // de cabeça para baixo só a aceleração inverte; a direção continua natural
   float str = deadzone(cmdX);
   float ch1, ch2;
   if (MIX_IN_ESP) {
@@ -184,14 +195,16 @@ void updateOutputs() {
   pwmWriteUs(1, pctToUs(ch2));
 
   // Arma: só para frente (1500..2000), rampa na subida e parada imediata ao reduzir.
+  // O sentido só é trocado com a arma parada, para não reverter o ESC em plena rotação.
+  if ((int)weaponUs <= US_NEUTRAL) weaponInvert = INVERT_WEAPON != cmdFlip;
   float target = pctToUs(cmdWeapon);
   if (target <= weaponUs) {
     weaponUs = target;
   } else {
     weaponUs = min(target, weaponUs + WEAPON_RAMP_US_S * dt);
   }
-  pwmWriteUs(2, (int)weaponUs);
-  pwmWriteUs(3, INVERT_WEAPON2 ? 2 * US_NEUTRAL - (int)weaponUs : (int)weaponUs);
+  pwmWriteUs(2, mirrorUs((int)weaponUs, weaponInvert));
+  pwmWriteUs(3, mirrorUs((int)weaponUs, weaponInvert != INVERT_WEAPON2));
 }
 
 void setup() {
